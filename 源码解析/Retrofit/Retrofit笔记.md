@@ -7,6 +7,8 @@ _需要用到[Type相关知识](../../Java知识点/反射相关/Type.md)_
 
 ## 调用`create(class)`后发生了什么
 
+_由于Retrofit有多个类与okhttp3类名相同,okhttp3的类会加上包名.如:`Call<?>`为Retrofit中的类, `okhttp3.Call`为okhttp3中的类_
+
 1. `create(class)`,创建动态代理对象
     ```java
     public <T> T create(final Class<T> service) {
@@ -46,7 +48,7 @@ _需要用到[Type相关知识](../../Java知识点/反射相关/Type.md)_
     }
     ```
 
-1. `loadServiceMethod` 解析注解
+1. `loadServiceMethod` 从缓存中获取`ServiceMethod`对象或重新解析生成
     ```java
     //Retrofit.java
     //缓存
@@ -63,8 +65,13 @@ _需要用到[Type相关知识](../../Java知识点/反射相关/Type.md)_
         }
         return result;
     }
+
+    ```
+
+1. `ServiceMethod.parseAnnotations` 初步过滤返回类型
+    ```java
     //ServiceMethod.java
-    //返回类型的判断
+    //返回类型的初步判断
     static <T> ServiceMethod<T> parseAnnotations(Retrofit retrofit, Method method) {
         //存储请求信息的一个类
         RequestFactory requestFactory = RequestFactory.parseAnnotations(retrofit, method);
@@ -79,27 +86,336 @@ _需要用到[Type相关知识](../../Java知识点/反射相关/Type.md)_
         if (returnType == void.class) {
             throw methodError(method, "Service methods cannot return void.");
         }
-
+        //进一步解析
         return HttpServiceMethod.parseAnnotations(retrofit, method, requestFactory);
     }
+    ```
+
+1. `RequestFactory.parseAnnotations()` 存储信息,解析注解,检查[请求方式与参数是否符合标准](##关于请求方式)
+
+    ```java
+    //RequestFactory
+    static RequestFactory parseAnnotations(Retrofit retrofit, Method method) {
+        return new Builder(retrofit, method).build();
+    }
+
+    //RequestFactory.Builder
+    Builder(Retrofit retrofit, Method method) {
+        this.retrofit = retrofit;
+        this.method = method;
+        this.methodAnnotations = method.getAnnotations();
+        this.parameterTypes = method.getGenericParameterTypes();
+        this.parameterAnnotationsArray = method.getParameterAnnotations();
+    }
+
+    //RequestFactory.Builder
+    RequestFactory build() {
+        for (Annotation annotation : methodAnnotations) {
+            //解析请求方式注解
+            parseMethodAnnotation(annotation);
+        }
+
+        if (httpMethod == null) {
+            throw methodError(method, "HTTP method annotation is required (e.g., @GET, @POST, etc.).");
+        }
+
+        if (!hasBody) {
+            if (isMultipart) {
+                throw methodError(method,
+                        "Multipart can only be specified on HTTP methods with request body (e.g., @POST).");
+            }
+            if (isFormEncoded) {
+                throw methodError(method, "FormUrlEncoded can only be specified on HTTP methods with "
+                        + "request body (e.g., @POST).");
+            }
+        }
+
+        int parameterCount = parameterAnnotationsArray.length;
+        parameterHandlers = new ParameterHandler<?>[parameterCount];
+        for (int p = 0; p < parameterCount; p++) {
+            //ParameterHandler 处理参数的一个基类
+            parameterHandlers[p] = parseParameter(p, parameterTypes[p], parameterAnnotationsArray[p]);
+        }
+
+        if (relativeUrl == null && !gotUrl) {
+            throw methodError(method, "Missing either @%s URL or @Url parameter.", httpMethod);
+        }
+        if (!isFormEncoded && !isMultipart && !hasBody && gotBody) {
+            throw methodError(method, "Non-body HTTP method cannot contain @Body.");
+        }
+        if (isFormEncoded && !gotField) {
+            throw methodError(method, "Form-encoded method must contain at least one @Field.");
+        }
+        if (isMultipart && !gotPart) {
+            throw methodError(method, "Multipart method must contain at least one @Part.");
+        }
+
+        return new RequestFactory(this);
+    }
+
+    ```
+
+1. `HttpServiceMethod.parseAnnotations` 进一步解析注解, 生成`HttpServiceMethod`对象
+    ```java
     //HttpServiceMethod.java
+    //解析注解,生成HttpServiceMethod对象
     static <ResponseT, ReturnT> HttpServiceMethod<ResponseT, ReturnT> parseAnnotations(
             Retrofit retrofit, Method method, RequestFactory requestFactory) {
+        //将Call<?>转换为其他类型,[具体过程](##关于CallAdapter)
         CallAdapter<ResponseT, ReturnT> callAdapter = createCallAdapter(retrofit, method);
+        //获取Call<?>中的泛型类型,如果method返回类型不是泛型,则会抛异常
         Type responseType = callAdapter.responseType();
         if (responseType == Response.class || responseType == okhttp3.Response.class) {
             throw methodError(method, "'"
                     + Utils.getRawType(responseType).getName()
                     + "' is not a valid response body type. Did you mean ResponseBody?");
         }
+        //使用@HEAD时,返回值必须为Void,[详情](##关于请求方式)
         if (requestFactory.httpMethod.equals("HEAD") && !Void.class.equals(responseType)) {
             throw methodError(method, "HEAD method must use Void as response type.");
         }
-
+        //将返回值解析成java对象,[具体过程](##关于Converter)
         Converter<ResponseBody, ResponseT> responseConverter =
                 createResponseConverter(retrofit, method, responseType);
-
+        //用于生成okhttp3.Call的工厂类,典型的是OkHttpClient
         okhttp3.Call.Factory callFactory = retrofit.callFactory;
         return new HttpServiceMethod<>(requestFactory, callFactory, callAdapter, responseConverter);
     }
     ```
+1. `HttpServiceMethod.invoke`
+    ```java
+    @Override
+    ReturnT invoke(Object[] args) {
+        //Call<?>经过CallAdapter转换成<ReturnT>
+        return callAdapter.adapt(
+                new OkHttpCall<>(requestFactory, args, callFactory, responseConverter));
+    }
+    ```
+
+## `OkHttpCall`, 实现了 `Call<?>`, 包装了对okhttp3的请求调用
+
+1. `Call<?>`
+    ```java
+    public interface Call<T> extends Cloneable {
+        //同步请求
+        Response<T> execute() throws IOException;
+        //异步请求
+        void enqueue(Callback<T> callback);
+        //是否已请求
+        boolean isExecuted();
+        //取消请求
+        void cancel();
+        //是否已取消
+        boolean isCanceled();
+        Call<T> clone();
+        //获取okhttp3请求对象
+        okhttp3.Request request();
+    }
+    ```
+
+1. `execute`同步请求,调用okhttp3的`okhttp3.call.execute`
+    ```java
+    @Override
+    public Response<T> execute() throws IOException {
+        okhttp3.Call call;
+
+        synchronized (this) {
+            if (executed) throw new IllegalStateException("Already executed.");
+            executed = true;
+            //creationFailure是createRawCall()过程中抛出的异常
+            //因为request()可以调用多次,所以缓存该异常
+            if (creationFailure != null) {
+                if (creationFailure instanceof IOException) {
+                    throw (IOException) creationFailure;
+                } else if (creationFailure instanceof RuntimeException) {
+                    throw (RuntimeException) creationFailure;
+                } else {
+                    throw (Error) creationFailure;
+                }
+            }
+
+            call = rawCall;
+            if (call == null) {
+                try {
+                    call = rawCall = createRawCall();
+                } catch (IOException | RuntimeException | Error e) {
+                    throwIfFatal(e); //  Do not assign a fatal error to creationFailure.
+                    creationFailure = e;
+                    throw e;
+                }
+            }
+        }
+
+        if (canceled) {
+            call.cancel();
+        }
+        //解析okhttp3.Response 为 Response<?>
+        return parseResponse(call.execute());
+    }
+    ```
+
+1. `createRawCall` 创建`okhttp3.Call`
+    ```java
+    //OkHttpCall
+    private okhttp3.Call createRawCall() throws IOException {
+        okhttp3.Call call = callFactory.newCall(requestFactory.create(args));
+        if (call == null) {
+            throw new NullPointerException("Call.Factory returned null.");
+        }
+        return call;
+    }
+
+    //RequestFactory 处理参数,生成请求
+    okhttp3.Request create(Object[] args) throws IOException {
+        @SuppressWarnings("unchecked") // It is an error to invoke a method with the wrong arg types.
+                ParameterHandler<Object>[] handlers = (ParameterHandler<Object>[]) parameterHandlers;
+
+        int argumentCount = args.length;
+        if (argumentCount != handlers.length) {
+            throw new IllegalArgumentException("Argument count (" + argumentCount
+                    + ") doesn't match expected count (" + handlers.length + ")");
+        }
+
+        RequestBuilder requestBuilder = new RequestBuilder(httpMethod, baseUrl, relativeUrl,
+                headers, contentType, hasBody, isFormEncoded, isMultipart);
+
+        List<Object> argumentList = new ArrayList<>(argumentCount);
+        for (int p = 0; p < argumentCount; p++) {
+            argumentList.add(args[p]);
+            //根据不同的注解处理参数
+            handlers[p].apply(requestBuilder, args[p]);
+        }
+
+        return requestBuilder.get()
+                .tag(Invocation.class, new Invocation(method, argumentList))
+                .build();
+    }
+    ```
+
+1. `enqueue`异步请求,逻辑与`execute`类似,调用okhttp3的`okhttp3.call.enqueue`
+
+1. `parseResponse` 解析okhttp3.Response 为 Response<?>
+    ```java
+     /**
+     * [Http状态码](http://www.runoob.com/http/http-status-codes.html)
+     * 1** 信息，服务器收到请求，需要请求者继续执行操作
+     * 2** 成功，操作被成功接收并处理
+     * 3** 重定向，需要进一步的操作以完成请求
+     * 4** 客户端错误，请求包含语法错误或无法完成请求
+     * 5** 服务器错误，服务器在处理请求的过程中发生了错误
+     */
+    Response<T> parseResponse(okhttp3.Response rawResponse) throws IOException {
+        ResponseBody rawBody = rawResponse.body();
+
+        // 这里为什么要替换原来的body?
+        // Remove the body's source (the only stateful object) so we can pass the response along.
+        rawResponse = rawResponse.newBuilder()
+                .body(new NoContentResponseBody(rawBody.contentType(), rawBody.contentLength()))
+                .build();
+
+        int code = rawResponse.code();
+        if (code < 200 || code >= 300) {
+            try {
+                // 缓存响应体
+                // Buffer the entire body to avoid future I/O.
+                ResponseBody bufferedBody = Utils.buffer(rawBody);
+                return Response.error(bufferedBody, rawResponse);
+            } finally {
+                rawBody.close();
+            }
+        }
+
+        if (code == 204 || code == 205) {
+            //body都为空
+            //204   No Content      无内容。服务器成功处理，但未返回内容。
+            //205   Reset Content   重置内容。服务器处理成功，终端应重置文档。
+            rawBody.close();
+            return Response.success(null, rawResponse);
+        }
+
+        ExceptionCatchingResponseBody catchingBody = new ExceptionCatchingResponseBody(rawBody);
+        try {
+            //解析响应体
+            T body = responseConverter.convert(catchingBody);
+            return Response.success(body, rawResponse);
+        } catch (RuntimeException e) {
+            //convert()中,Source.read()捕获的异常,为什么不直接抛出?
+            catchingBody.throwIfCaught();
+            throw e;
+        }
+    }
+
+    ```
+
+## Retrofit.Builder
+
+`Retrofit.Builder`中的可配置项有:
+
+1. `client()`, `callFactory()` 用于创建`okhttp3.Call`
+
+1. `baseUrl()` 用于设置api地址前缀,必须以 ' __/__ ' 结束
+
+1. `addConverterFactory()` 传入`Converter.Factory`用于序列化或反序列化,`defaultConverterFactoriesSize()`:
+    1. 默认:size = 0
+
+    1. Android:`OptionalConverterFactory`(AndroidSdk>=24), size = AndroidSdk >= 24 ? 1 : 0
+
+    1. Java8:`OptionalConverterFactory`, size = 1
+
+    ```java
+    List<Converter.Factory> converterFactories = new ArrayList<>(
+            1 + this.converterFactories.size() + platform.defaultConverterFactoriesSize());
+    //先内置,再自定义,最后默认
+    converterFactories.add(new BuiltInConverters());
+    converterFactories.addAll(this.converterFactories);
+    converterFactories.addAll(platform.defaultConverterFactories());
+    ```
+
+1. `addCallAdapterFactory()` 传入`CallAdapter.Factory`用于将`Call<?>`转换为其他返回类型.`defaultCallAdapterFactories()`(按顺序):
+    1. 默认:根据`callbackExecutor`是否为null,`DefaultCallAdapterFactory`或`ExecutorCallAdapterFactory`, size = 1
+
+    1. Android:`CompletableFutureCallAdapterFactory`(AndroidSdk>=24),`ExecutorCallAdapterFactory`, size = AndroidSdk >= 24 ? 2 : 1
+
+    1. Java8:`CompletableFutureCallAdapterFactory` + 默认
+
+    ```java
+    //先添加自定义的,再添加默认的
+    List<CallAdapter.Factory> callAdapterFactories = new ArrayList<>(this.callAdapterFactories);
+    callAdapterFactories.addAll(platform.defaultCallAdapterFactories(callbackExecutor));
+    ```
+
+1. `callbackExecutor()` 设置`Callback`调用的线程,例如Android默认设置主线程.注意,他不影响`CallAdapter.adapt()`执行的线程
+
+1. `validateEagerly()` 是否在调用 `create()`时就解析接口中所有方法
+
+## 为什么Android中默认回调在主线程
+
+Retrofit中自带有两个Factory: `DefaultCallAdapterFactory`, `ExecutorCallAdapterFactory`.当在Android平台下时,使用传入MainLooper的`ExecutorCallAdapterFactory`
+
+## 请求方式
+
+## ParameterHandler
+
+1. `@Url`
+
+1. `@Path`
+
+1. `@Query`
+
+1. `@QueryName`
+
+1. `@QueryMap`
+
+1. `@Header`
+
+1. `@HeaderMap`
+
+1. `@Field`
+
+1. `@FieldMap`
+
+1. `@Part`
+
+1. `@PartMap`
+
+1. `@Body`
