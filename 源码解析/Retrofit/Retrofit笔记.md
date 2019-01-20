@@ -353,7 +353,29 @@ _由于Retrofit有多个类与okhttp3类名相同,okhttp3的类会加上包名.�
 
 1. `client()`, `callFactory()` 用于创建`okhttp3.Call`
 
-1. `baseUrl()` 用于设置api地址前缀,必须以 ' __/__ ' 结束
+1. `baseUrl()` 用于设置api地址前缀
+
+    1. 必须以 ' __/__ ' 结束
+
+        > http://example.com/api 报错,baseUrl must end in ' / ' <br/>
+        > http://example.com 正常,原因是`okhttp3.HttpUrl`在结尾补上了' / '
+
+    1. 根据Endpoint有以下情况:
+
+        1. 以 '/'开头,只保留`baseUrl`主机名
+            > Base URL: http://example.com/api/<br/>
+            > Endpoint: /foo/bar/<br/>
+            > Result: http://example.com/foo/bar/
+
+        1. Endpoint是完整地址,无视`baseUrl`
+            > Base URL: http://example.com/<br/>
+            > Endpoint: https://github.com/square/retrofit/<br/>
+            > Result: https://github.com/square/retrofit/
+
+        1. 以 '//'开头,无视`baseUrl`,补全为http
+            > Base URL: http://example.com<br/>
+            > Endpoint: //github.com/square/retrofit/<br/>
+            > Result: http://github.com/square/retrofit/
 
 1. `addConverterFactory()` 传入`Converter.Factory`用于序列化或反序列化,`defaultConverterFactoriesSize()`:
     1. 默认:size = 0
@@ -392,14 +414,72 @@ _由于Retrofit有多个类与okhttp3类名相同,okhttp3的类会加上包名.�
 
 Retrofit中自带有两个Factory: `DefaultCallAdapterFactory`, `ExecutorCallAdapterFactory`.当在Android平台下时,使用传入MainLooper的`ExecutorCallAdapterFactory`
 
-## 请求方式
+## 请求方式 方法的注解
 
-## ParameterHandler
+## ParameterHandler 参数的注解
 
-1. `@Url`
-
+1. `@Url`具体规则[Retrofit.Builder](##Retrofit.Builder)中的baseUrl相关
+    ```java
+    if (gotUrl) {
+        //不能有多个@Url注解
+        throw parameterError(method, p, "Multiple @Url method annotations found.");
+    }
+    if (gotPath) {
+        //@Path不能与@Url一起用
+        throw parameterError(method, p, "@Path parameters may not be used with @Url.");
+    }
+    if (gotQuery) {
+        //@Url必须在@Query前
+        throw parameterError(method, p, "A @Url parameter must not come after a @Query.");
+    }
+    if (gotQueryName) {
+        //@Url必须在@QueryName前
+        throw parameterError(method, p, "A @Url parameter must not come after a @QueryName.");
+    }
+    if (gotQueryMap) {
+        //@Url必须在@QueryMap前
+        throw parameterError(method, p, "A @Url parameter must not come after a @QueryMap.");
+    }
+    if (relativeUrl != null) {
+        //@Url与Endpoint 不能同时使用
+        throw parameterError(method, p, "@Url cannot be used with @%s URL", httpMethod);
+    }
+    //...
+    //参数类型必须是以下之一:HttpUrl,String,URI,Uri
+    if (type == HttpUrl.class
+            || type == String.class
+            || type == URI.class
+            || (type instanceof Class && "android.net.Uri".equals(((Class<?>) type).getName()))) {
+        return new ParameterHandler.RelativeUrl();
+    } else {
+        throw parameterError(method, p,
+                "@Url must be okhttp3.HttpUrl, String, java.net.URI, or android.net.Uri type.");
+    }
+    ```
 1. `@Path`
-
+    ```java
+    if (gotQuery) {
+        //@Path必须在@Query之前
+        throw parameterError(method, p, "A @Path parameter must not come after a @Query.");
+    }
+    if (gotQueryName) {
+        //@Path必须在@QueryName之前
+        throw parameterError(method, p, "A @Path parameter must not come after a @QueryName.");
+    }
+    if (gotQueryMap) {
+        //@Path必须在@QueryMap之前
+        throw parameterError(method, p, "A @Path parameter must not come after a @QueryMap.");
+    }
+    if (gotUrl) {
+        //@Path与@Url 不能同时使用
+        throw parameterError(method, p, "@Path parameters may not be used with @Url.");
+    }
+    if (relativeUrl == null) {
+        //@Path与Endpoint 必须同时使用
+        throw parameterError(method, p, "@Path can only be used with relative url on @%s",
+                httpMethod);
+    }
+    ```
 1. `@Query`
 
 1. `@QueryName`
