@@ -1,6 +1,6 @@
 # EventBus 笔记
 
-_EventBus version: 3.1.1_
+_EventBus version: 3.1.1_<br/>
 _暂称具有`@Subscribe`注解的类为观察者，称被发送的事件为被观察者)_
 
 ---
