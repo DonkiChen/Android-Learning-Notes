@@ -138,7 +138,7 @@ _暂称具有`@Subscribe`注解的类为观察者，称被发送的事件为被�
     }
     ```
 
-1. `postSingleEvent` 中，根据 `eventInheritance` 判断是否分发 `event` 的基类和接口，调用 `postSingleEventForEventType` 进行真正的分发
+1. `postSingleEvent` 中，根据 `eventInheritance` 判断是否分发 `event` 的基类和接口，调用 `postSingleEventForEventType`
 
     ```java
     private void postSingleEvent(Object event, PostingThreadState postingState) throws Error {
