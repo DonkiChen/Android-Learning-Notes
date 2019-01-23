@@ -357,7 +357,7 @@ _由于Retrofit有多个类与okhttp3类名相同,okhttp3的类会加上包名.�
 
     1. 必须以 ' __/__ ' 结束
 
-        > http://example.com/api 报错,baseUrl must end in ' / ' <br/>
+        > http://example.com/api 报错, baseUrl must end in ' / ' <br/>
         > http://example.com 正常,原因是`okhttp3.HttpUrl`在结尾补上了' / '
 
     1. 根据Endpoint有以下情况:
@@ -412,90 +412,159 @@ _由于Retrofit有多个类与okhttp3类名相同,okhttp3的类会加上包名.�
 
 ## 为什么Android中默认回调在主线程
 
-Retrofit中自带有两个Factory: `DefaultCallAdapterFactory`, `ExecutorCallAdapterFactory`.当在Android平台下时,使用传入MainLooper的`ExecutorCallAdapterFactory`
+Retrofit中自带有两个Factory: `DefaultCallAdapterFactory`, `ExecutorCallAdapterFactory`(指定线程池).当在Android平台下时,使用传入MainLooper的`ExecutorCallAdapterFactory`
 
-## 请求方式 方法的注解
+## 方法的注解
+
+### 请求方式
+
+内置请求方式 | 能否有body
+:-: | :-:
+DELETE | false
+GET | false
+HEAD | false
+PATCH | true
+POST | true
+PUT | true
+OPTIONS | false
+
+`@HTTP` 自定义请求方式
+
+```java
+public @interface HTTP {
+    //方式名
+    String method();
+    //Endpoint
+    String path() default "";
+    //是否有body
+    boolean hasBody() default false;
+}
+```
+
+### 其他
+
+1. `@Headers` 字符串数组, 格式必须是`"key:value"`
+
+1. `@Multipart` 媒体类型`multipart/form-data`,在参数中添加至少1个 `@Part`,`@PartMap`.不能与`@FormUrlEncoded`同时使用
+
+1. `@FormUrlEncoded` 媒体类型`application/x-www-form-urlencoded`,在参数中添加至少1个`@Filed`,`@FiledMap`.不能与`@Multipart`同时使用
 
 ## ParameterHandler 参数的注解
 
-1. `@Url`具体规则[Retrofit.Builder](##Retrofit.Builder)中的baseUrl相关
-    ```java
-    if (gotUrl) {
-        //不能有多个@Url注解
-        throw parameterError(method, p, "Multiple @Url method annotations found.");
-    }
-    if (gotPath) {
-        //@Path不能与@Url一起用
-        throw parameterError(method, p, "@Path parameters may not be used with @Url.");
-    }
-    if (gotQuery) {
-        //@Url必须在@Query前
-        throw parameterError(method, p, "A @Url parameter must not come after a @Query.");
-    }
-    if (gotQueryName) {
-        //@Url必须在@QueryName前
-        throw parameterError(method, p, "A @Url parameter must not come after a @QueryName.");
-    }
-    if (gotQueryMap) {
-        //@Url必须在@QueryMap前
-        throw parameterError(method, p, "A @Url parameter must not come after a @QueryMap.");
-    }
-    if (relativeUrl != null) {
-        //@Url与Endpoint 不能同时使用
-        throw parameterError(method, p, "@Url cannot be used with @%s URL", httpMethod);
-    }
-    //...
-    //参数类型必须是以下之一:HttpUrl,String,URI,Uri
-    if (type == HttpUrl.class
-            || type == String.class
-            || type == URI.class
-            || (type instanceof Class && "android.net.Uri".equals(((Class<?>) type).getName()))) {
-        return new ParameterHandler.RelativeUrl();
-    } else {
-        throw parameterError(method, p,
-                "@Url must be okhttp3.HttpUrl, String, java.net.URI, or android.net.Uri type.");
-    }
-    ```
-1. `@Path`
-    ```java
-    if (gotQuery) {
-        //@Path必须在@Query之前
-        throw parameterError(method, p, "A @Path parameter must not come after a @Query.");
-    }
-    if (gotQueryName) {
-        //@Path必须在@QueryName之前
-        throw parameterError(method, p, "A @Path parameter must not come after a @QueryName.");
-    }
-    if (gotQueryMap) {
-        //@Path必须在@QueryMap之前
-        throw parameterError(method, p, "A @Path parameter must not come after a @QueryMap.");
-    }
-    if (gotUrl) {
-        //@Path与@Url 不能同时使用
-        throw parameterError(method, p, "@Path parameters may not be used with @Url.");
-    }
-    if (relativeUrl == null) {
-        //@Path与Endpoint 必须同时使用
-        throw parameterError(method, p, "@Path can only be used with relative url on @%s",
-                httpMethod);
-    }
-    ```
+1. `@Url` 与baseUrl的拼接规则->[Retrofit.Builder](##Retrofit.Builder)中的baseUrl相关.具体规则:
+
+    1. 不能有多个`@Url`注解
+
+    1. 与`@Path`不能同时使用
+
+    1. 必须在`@Query`前
+
+    1. 必须在`@QueryName`前
+
+    1. 必须在`@QueryMap`前
+
+    1. 与Endpoint 不能同时使用
+
+    1. 参数类型必须是以下之一:`HttpUrl`, `String`, `URI`, `Uri`
+
+1. `@Path`, 替换Endpoint中的 `{...}`,具体规则:
+
+    1. 必须在`@Query`之前
+
+    1. 必须在`@QueryName`之前
+
+    1. 必须在`@QueryMap`之前
+
+    1. 与`@Url`不能同时使用
+
+    1. 与Endpoint 必须同时使用
+
+    1. 参数会通过`Converter.Factory.stringConverter`或`toString()`转换成String
+
 1. `@Query`
+
+    1. 类型可以是`Iterable`,`Array`,`Object`
+
+    1. 参数会通过`Converter.Factory.stringConverter`或`toString()`转换成String
 
 1. `@QueryName`
 
+    1. 类型可以是`Iterable`,`Array`,`Object`
+
+    1. 参数会通过`Converter.Factory.stringConverter`或`toString()`转换成String
+
 1. `@QueryMap`
+
+    1. 参数必须是`Map`
+
+    1. `Map`必须指定类型,例如`Map<String,String>`
+
+    1. key类型必须是`String`
+
+    1. value类型会通过`Converter.Factory.stringConverter`或`toString()`转换成String
 
 1. `@Header`
 
+    1. 类型可以是`Iterable`,`Array`,`Object`
+
+    1. 参数会通过`Converter.Factory.stringConverter`或`toString()`转换成String
+
 1. `@HeaderMap`
+
+    1. 参数必须是`Map`
+
+    1. `Map`必须指定类型,例如`Map<String,String>`
+
+    1. key类型必须是`String`
+
+    1. value类型会通过`Converter.Factory.stringConverter`或`toString()`转换成String
 
 1. `@Field`
 
+    1. 方法必须要有`@FormUrlEncoded`注解
+
+    1. 类型可以是`Iterable`,`Array`,`Object`
+
+    1. 参数会通过`Converter.Factory.stringConverter`或`toString()`转换成String
+
 1. `@FieldMap`
+
+    1. 方法必须要有`@FormUrlEncoded`注解
+
+    1. 参数必须是`Map`
+
+    1. `Map`必须指定类型,例如`Map<String,String>`
+
+    1. key类型必须是`String`
+
+    1. value类型会通过`Converter.Factory.stringConverter`或`toString()`转换成String
 
 1. `@Part`
 
+    1. 方法必须有`@Multipart`注解
+
+    1. value,与`MultipartBody.Part`不能同时存在
+
+        1. 为空时,参数必须是`MultipartBody.Part`, `Iterable<MultipartBody.Part>` 或 `MultipartBody.Part[]`
+
+        1. 不为空时,参数可以是`RequestBody`或`Object`,会通过`Converter.Factory.requestBodyConverter`转换成`RequestBody`
+
 1. `@PartMap`
 
+    1. 方法必须有`@Multipart`注解
+
+    1. 参数必须是`Map`
+
+    1. `Map`必须指定类型,例如`Map<String,String>`
+
+    1. key类型必须是`String`
+
+    1. value类型不能是`MultipartBody.Part`,会通过`Converter.Factory.requestBodyConverter`转换成`RequestBody`
+
 1. `@Body`
+
+    1. 不能与`@FormUrlEncoded`或`@Multipart`同时使用
+
+    1. 只能有一个`@Body`
+
+    1. 参数会通过`Converter.Factory.requestBodyConverter`转换成`RequestBody`
