@@ -120,7 +120,7 @@ ___
 
 4. `BridgeInterceptor` 添加默认的请求头, 可以设置自定义cookie(默认为空), gzip压缩
 5. `CacheInterceptor` 缓存
-6. `ConnectInterceptor` 初始化 `Exchange`, 这一个拦截器里做了连接池的复用, dns的解析, 建立Socket, TSL握手, 建立了和服务器的连接
+6. `ConnectInterceptor` 初始化 `Exchange`, 这一个拦截器里做了连接池的复用, dns的解析, 建立Socket, TLS握手, 建立了和服务器的连接
 7. `CallServerInterceptor` 真正发送请求 以及返回响应
 
 
@@ -145,3 +145,73 @@ ___
 1. 应用拦截器拿到的请求是最原始的请求, 拿到的响应是最终其他拦截器处理过的响应; 网络拦截器拿到的是最终的请求, 与服务器拿到的请求一致, 拿到的响应是最原始的
 2. 如果本地有缓存且未失效的情况下, 只有应用拦截器会拿到请求和响应, 因为在`CacheInterceptor`就已经返回了缓存着的响应, 不会再走之后的拦截器
 3. 如果遇到失败重试或者重定向等的情况, 应用拦截器只会记录一次请求和响应, 而网络拦截器每次都会记录
+
+## 协议是如何选择的
+
+```kotlin
+  private fun establishProtocol(
+    connectionSpecSelector: ConnectionSpecSelector,
+    pingIntervalMillis: Int,
+    call: Call,
+    eventListener: EventListener
+  ) {
+    //如果url不是https
+    if (route.address.sslSocketFactory == null) {
+      //如果在OkHttpClient.Builder.protocols 添加了 Protocol.H2_PRIOR_KNOWLEDGE
+      //即已知服务端支持Http2, 就直接使用Http2协议, 没有升级过程
+      if (Protocol.H2_PRIOR_KNOWLEDGE in route.address.protocols) {
+        socket = rawSocket
+        protocol = Protocol.H2_PRIOR_KNOWLEDGE
+        startHttp2(pingIntervalMillis)
+        return
+      }
+      //默认如果不是https就用http1.1协议
+      socket = rawSocket
+      protocol = Protocol.HTTP_1_1
+      return
+    }
+
+    eventListener.secureConnectStart(call)
+    //tls连接
+    connectTls(connectionSpecSelector)
+    eventListener.secureConnectEnd(call, handshake)
+
+    if (protocol === Protocol.HTTP_2) {
+      //如果返回的是http2协议, 则使用http2协议
+      startHttp2(pingIntervalMillis)
+    }
+  }
+
+  //tls连接
+  private fun connectTls(connectionSpecSelector: ConnectionSpecSelector) {
+    val address = route.address
+    val sslSocketFactory = address.sslSocketFactory
+    var success = false
+    var sslSocket: SSLSocket? = null
+    try {
+      sslSocket = sslSocketFactory!!.createSocket(
+          rawSocket, address.url.host, address.url.port, true /* autoClose */) as SSLSocket
+      // ...握手 验证证书...
+
+      // Success! Save the handshake and the ALPN protocol.
+      // 如果支持tls拓展协议(默认tls都支持) -> ALPN  应用层协议协商, 可以决定应用层用啥协议, 减少额外的往返通讯
+      val maybeProtocol = if (connectionSpec.supportsTlsExtensions) {
+        Platform.get().getSelectedProtocol(sslSocket)
+      } else {
+        null
+      }
+      socket = sslSocket
+      source = sslSocket.source().buffer()
+      sink = sslSocket.sink().buffer()
+      protocol = if (maybeProtocol != null) Protocol.get(maybeProtocol) else Protocol.HTTP_1_1
+      success = true
+    } finally {
+      if (sslSocket != null) {
+        Platform.get().afterHandshake(sslSocket)
+      }
+      if (!success) {
+        sslSocket?.closeQuietly()
+      }
+    }
+  }
+```

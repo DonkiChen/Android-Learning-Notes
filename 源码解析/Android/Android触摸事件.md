@@ -8,7 +8,7 @@
 1. enabled且触摸的是滚动条
 2. enabled且设置了 `OnTouchListener`, 且 `OnTouchListener.onTouch` 返回true
 3. `onTouchEvent` 返回true
-```Kotlin
+```java
     //省略了部分代码
     public boolean dispatchTouchEvent(MotionEvent event) {
         //...无障碍
@@ -59,7 +59,7 @@
 ### `View.onTouchEvent`
 
 默认`View` 只要可点击(Click, LongClick, ContextClick) 或者 设置了tooltip就返回true; 如果是disabled, 可点击则返回true(即仍然会消耗触摸事件), 否则返回false
-```Kotlin
+```java
     public boolean onTouchEvent(MotionEvent event) {
         final float x = event.getX();
         final float y = event.getY();
@@ -249,7 +249,7 @@
 2. 如果 `ViewGroup.onTouchEvent` 对DOWN事件返回了 true, 那么后续事件都不会经过该ViewGroup的 `onInterceptTouchEvent`
 3. 如果子View消耗了事件, 在后续事件中ViewGroup拦截了事件(`onInterceptTouchEvent` 返回了true), 则会给子View传递CANCEL事件, 且会被移出TouchTarget链
 
-```Kotlin
+```java
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
         //... 触摸事件验证 + 无障碍

@@ -330,14 +330,57 @@ Activity, Fragment获取当前的FragmentManager, 生成 SupportRequestManagerFr
     }
 
     EngineJob<R> engineJob = engineJobFactory.build(/**/);
-    // 获取图片: 1.资源缓存, 之前被解码过, 转换过的图片的磁盘缓存 2. 磁盘源文件缓存 3. 没有缓存, 根据传入的类型去加载
+    //获取图片: 1.资源缓存, 之前被解码过, 转换过的图片的磁盘缓存 2. 磁盘源文件缓存 3. 没有缓存, 根据传入的类型去加载
     DecodeJob<R> decodeJob = decodeJobFactory.build(/**/);
 
     jobs.put(key, engineJob);
 
     engineJob.addCallback(cb, callbackExecutor);
+    //开始获取图片
     engineJob.start(decodeJob);
 
     return new LoadStatus(cb, engineJob);
   }
   ```
+
+## 缓存
+
+### ActiveResource
+
+记录了当前正在使用的资源, `Map<Key, ResourceWeakReference>`, 存的value是弱引用, 还在构造中就新建了一个线程, 循环从 `ReferenceQueue<EngineResource<?>>` 取出 `ResourceWeakReference`, 然后根据 `ResourceWeakReference.key` 从map中删除, 如果设置了 `isActiveResourceRetentionAllowed == ture && referent.isMemoryCacheable` 为true, 还会将该资源传给缓存 `MemoryCache`
+
+```Java
+    //ResourceWeakReference 构造函数
+    ResourceWeakReference(
+        @NonNull Key key,
+        @NonNull EngineResource<?> referent,
+        @NonNull ReferenceQueue<? super EngineResource<?>> queue,
+        boolean isActiveResourceRetentionAllowed) {
+      super(referent, queue);
+      this.key = Preconditions.checkNotNull(key);
+      this.resource =
+          referent.isMemoryCacheable() && isActiveResourceRetentionAllowed
+              ? Preconditions.checkNotNull(referent.getResource())
+              : null;
+      isCacheable = referent.isMemoryCacheable();
+    }
+
+
+  void cleanupActiveReference(@NonNull ResourceWeakReference ref) {
+    synchronized (this) {
+      //这里如果队列为空 会阻塞
+      activeEngineResources.remove(ref.key);
+      //ref.resource != null 条件是 referent.isMemoryCacheable() && isActiveResourceRetentionAllowed
+      if (!ref.isCacheable || ref.resource == null) {
+        return;
+      }
+    }
+
+    EngineResource<?> newResource =
+        new EngineResource<>(
+            ref.resource, /*isMemoryCacheable=*/ true, /*isRecyclable=*/ false, ref.key, listener);
+    //将资源放到内存缓存, MemeryCache
+    listener.onResourceReleased(ref.key, newResource);
+  }
+
+```
