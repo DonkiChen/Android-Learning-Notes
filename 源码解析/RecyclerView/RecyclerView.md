@@ -1,5 +1,5 @@
 # RecyclerView
-_version: 1.1.0_
+_version: 1.1.0  默认使用 `LinearLayoutManager` 来分析_
 ___
 
 ## 四级缓存
@@ -8,7 +8,7 @@ ___
 1. mAttachedScrap, mChangedViews
 2. mCachedViews
 3. ViewCacheExtension
-4. RecyclerPool
+4. RecycledViewPool
 
 ## PreLayout
 
@@ -93,3 +93,196 @@ ___
 ## 修改单独项目, 调用 `notifyDataSetChanged` 效率低的原因
 
 `notifyDataSetChanged`会将所有View remove掉, 加到最后一级缓存 `RecycledViewPool` 中, 然后取出缓存后每个`ViewHolder`都要进行重新绑定
+
+## 测量
+
+### 单个child的尺寸测量
+
+```Java
+    /**
+     * 生成子控件的MeasureSpec
+     *
+     * @param parentSize 父控件的尺寸, 指RecyclerView
+     * @param parentMode 父控件的测量模式
+     * @param childDimension 子控件的尺寸, 或 MATCH_PARENT/WRAP_CONTENT. 从LayoutParams获取
+     * @param canScroll 父控件在该方向上能否滑动
+     *
+     * @return 返回一个子控件的 MeasureSpec
+     */
+    public static int getChildMeasureSpec(int parentSize, int parentMode, int padding,
+            int childDimension, boolean canScroll) {
+        int size = Math.max(0, parentSize - padding);
+        int resultSize = 0;
+        int resultMode = 0;
+        if (canScroll) {
+            //如果父控件能滚动
+            if (childDimension >= 0) {
+                //如果子控件有指定的大小, 那就是 EXACTLY
+                resultSize = childDimension;
+                resultMode = MeasureSpec.EXACTLY;
+            } else if (childDimension == LayoutParams.MATCH_PARENT) {
+                //如果子控件为 MATCH_PARENT, 则去看父控件测量模式
+                switch (parentMode) {
+                    case MeasureSpec.AT_MOST:
+                    case MeasureSpec.EXACTLY:
+                        //AT_MOST 或者 EXACTLY, 则使用父控件的尺寸和测量模式
+                        resultSize = size;
+                        resultMode = parentMode;
+                        break;
+                    case MeasureSpec.UNSPECIFIED:
+                        //如果是UNSPECIFIED, 则子控件也是UNSPECIFIED
+                        resultSize = 0;
+                        resultMode = MeasureSpec.UNSPECIFIED;
+                        break;
+                }
+            } else if (childDimension == LayoutParams.WRAP_CONTENT) {
+                //如果子控件是WRAP_CONTENT, 则是UNSPECIFIED
+                resultSize = 0;
+                resultMode = MeasureSpec.UNSPECIFIED;
+            }
+        } else {
+            //如果父控件不能滑动
+            if (childDimension >= 0) {
+                //如果子控件有指定的大小, 那就是 EXACTLY
+                resultSize = childDimension;
+                resultMode = MeasureSpec.EXACTLY;
+            } else if (childDimension == LayoutParams.MATCH_PARENT) {
+                //如果子控件为 MATCH_PARENT, 则用父控件的尺寸和测量模式
+                resultSize = size;
+                resultMode = parentMode;
+            } else if (childDimension == LayoutParams.WRAP_CONTENT) {
+                //如果子控件是WRAP_CONTENT, 则用父控件的尺寸
+                resultSize = size;
+                if (parentMode == MeasureSpec.AT_MOST || parentMode == MeasureSpec.EXACTLY) {
+                    resultMode = MeasureSpec.AT_MOST;
+                } else {
+                    resultMode = MeasureSpec.UNSPECIFIED;
+                }
+            }
+        }
+        return MeasureSpec.makeMeasureSpec(resultSize, resultMode);
+    }
+```
+
+### 整个RecyclerView的尺寸测量
+
+```Java
+
+    /**
+     * RecyclerView的默认测量方法
+     */
+    void defaultOnMeasure(int widthSpec, int heightSpec) {
+        // calling LayoutManager here is not pretty but that API is already public and it is better
+        // than creating another method since this is internal.
+        final int width = LayoutManager.chooseSize(widthSpec,
+                getPaddingLeft() + getPaddingRight(),
+                ViewCompat.getMinimumWidth(this));
+        final int height = LayoutManager.chooseSize(heightSpec,
+                getPaddingTop() + getPaddingBottom(),
+                ViewCompat.getMinimumHeight(this));
+
+        setMeasuredDimension(width, height);
+    }
+
+    @Override
+    protected void onMeasure(int widthSpec, int heightSpec) {
+        if (mLayout == null) {
+            defaultOnMeasure(widthSpec, heightSpec);
+            return;
+        }
+        if (mLayout.isAutoMeasureEnabled()) {
+            //如果开启了isAutoMeasureEnabled, 默认是开启的
+            final int widthMode = MeasureSpec.getMode(widthSpec);
+            final int heightMode = MeasureSpec.getMode(heightSpec);
+
+            //默认调用 RecyclerView.defaultOnMeasure
+            mLayout.onMeasure(mRecycler, mState, widthSpec, heightSpec);
+
+            final boolean measureSpecModeIsExactly =
+                    widthMode == MeasureSpec.EXACTLY && heightMode == MeasureSpec.EXACTLY;
+            if (measureSpecModeIsExactly || mAdapter == null) {
+                return;
+            }
+            //如果 adapter不为空且 宽/高至少一个不确定时
+
+            if (mState.mLayoutStep == State.STEP_START) {
+                dispatchLayoutStep1();
+            }
+            // LayoutManager 存 spec
+            mLayout.setMeasureSpecs(widthSpec, heightSpec);
+            mState.mIsMeasuring = true;
+
+            // 这一步会进行子控件的测量和放置, 就能拿到宽高了
+            dispatchLayoutStep2();
+
+            // 这里会遍历所有子控件 拿到父控件的一个上下左右的坐标, 然后调用setMeasuredDimension设置尺寸
+            mLayout.setMeasuredDimensionFromChildren(widthSpec, heightSpec);
+
+            // 如果宽高都不确定, 并且至少有一个子控件的宽高也是都不确定的, 需要重新测量一次
+            if (mLayout.shouldMeasureTwice()) {
+                mLayout.setMeasureSpecs(
+                        MeasureSpec.makeMeasureSpec(getMeasuredWidth(), MeasureSpec.EXACTLY),
+                        MeasureSpec.makeMeasureSpec(getMeasuredHeight(), MeasureSpec.EXACTLY));
+                mState.mIsMeasuring = true;
+                dispatchLayoutStep2();
+
+                mLayout.setMeasuredDimensionFromChildren(widthSpec, heightSpec);
+            }
+        } else {
+            if (mHasFixedSize) {
+                mLayout.onMeasure(mRecycler, mState, widthSpec, heightSpec);
+                return;
+            }
+            // custom onMeasure
+            if (mAdapterUpdateDuringMeasure) {
+                startInterceptRequestLayout();
+                onEnterLayoutOrScroll();
+                processAdapterUpdatesAndSetAnimationFlags();
+                onExitLayoutOrScroll();
+
+                if (mState.mRunPredictiveAnimations) {
+                    mState.mInPreLayout = true;
+                } else {
+                    // consume remaining updates to provide a consistent state with the layout pass.
+                    mAdapterHelper.consumeUpdatesInOnePass();
+                    mState.mInPreLayout = false;
+                }
+                mAdapterUpdateDuringMeasure = false;
+                stopInterceptRequestLayout(false);
+            } else if (mState.mRunPredictiveAnimations) {
+                // If mAdapterUpdateDuringMeasure is false and mRunPredictiveAnimations is true:
+                // this means there is already an onMeasure() call performed to handle the pending
+                // adapter change, two onMeasure() calls can happen if RV is a child of LinearLayout
+                // with layout_width=MATCH_PARENT. RV cannot call LM.onMeasure() second time
+                // because getViewForPosition() will crash when LM uses a child to measure.
+                setMeasuredDimension(getMeasuredWidth(), getMeasuredHeight());
+                return;
+            }
+
+            if (mAdapter != null) {
+                mState.mItemCount = mAdapter.getItemCount();
+            } else {
+                mState.mItemCount = 0;
+            }
+            startInterceptRequestLayout();
+            mLayout.onMeasure(mRecycler, mState, widthSpec, heightSpec);
+            stopInterceptRequestLayout(false);
+            mState.mInPreLayout = false; // clear
+        }
+    }
+```
+
+### 嵌套RecyclerView为什么会导致内部的RecyclerView全部显示
+
+外部`RecyclerView`宽度和高度`match_parent`, 内部`RecyclerView`宽度`match_parent`和高度`wrap_content`时, 在外部RecyclerView测量内部`RecyclerView`高度的时候, `RecyclerView.LayoutManager.getChildMeasureSpec` 返回了`size = 0 && mode = MeasureSpec.UNSPECIFIED`, 内部`RecyclerView`在测量时就会去放置全部子控件(因为`LinearLayoutManager.LayoutState.mInfinite` 为 true, 详见下方`LinearLayoutManager.resolveIsInfinite`), 然后计算所有子控件的高度作为内部`RecyclerView`的高度
+
+简而言之: `RecyclerView`(在可滑动的方向上)对子控件为`wrap_content`的测量模式是`MeasureSpec.UNSPECIFIED`, `RecyclerView`自身对`MeasureSpec.UNSPECIFIED`的测量方式又是将全部子控件都放置出来, 然后计算总共的宽高
+
+```Java
+    boolean resolveIsInfinite() {
+        // getMode() 就是 mLayoutManager.getWidthMode() 或者 mLayoutManager.getHeightMode()
+        // getEnd() 就是 mLayoutManager.getWidth() 或者 mLayoutManager.getHeight()
+        return mOrientationHelper.getMode() == View.MeasureSpec.UNSPECIFIED
+                && mOrientationHelper.getEnd() == 0;
+    }
+```

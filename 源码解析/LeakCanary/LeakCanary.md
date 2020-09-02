@@ -23,7 +23,7 @@ ___
 ## 检测ViewModel的泄露
 如果app依赖了androidX的Fragment, 在 `AndroidXFragmentDestroyWatcher` 里可以看到, 在`ActivityLifecycleCallbacks.onActivityCreated` 或 `FragmentLifecycleCallbacks.onFragmentCreated` 的时候会调用 `ViewModelClearedWatcher.install`
 
-如何检测ViewModel泄露: `ViewModelClearedWatcher` 其实也是 `ViewModel` 的子类, 在回调 `ViewModle.onClear` 的时候(即 `FragmentActivity` 或 `Fragment` 回调 `onDestroy` 时), 拿到 `ViewModelStoreOwner` 中所有注册了的 `ViewModel` , 然后加入检测队列
+如何检测ViewModel泄露: `ViewModelClearedWatcher` 其实也是 `ViewModel` 的子类, 在回调 `ViewModel.onClear` 的时候(即 `FragmentActivity` 或 `Fragment` 回调 `onDestroy` 时), 拿到 `ViewModelStoreOwner` 中所有注册了的 `ViewModel` , 然后加入检测队列
 
 
 ## InternalLeakCanary

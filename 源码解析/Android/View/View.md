@@ -20,7 +20,7 @@ ___
 
 1. 当`View`没有被attach到`Window`上时, 会将传入的`Runnable`存入队列中, 等到`View#dispatchAttachedToWindow(AttachInfo, int)`被调用时执行队列中的`Runnable`
 
-ViewRootImpl会在第一次调用`performTraversals()`时(当Activity第一次resume时, `ActivityThread#handleResumeActivity` -> `WindowManagerGlobal#addView` -> `ViewRootImpl#setView` -> `ViewRootImpl#doTraversal` -> `ViewRootImpl#performTraversals`, 省略部分), 一层层遍历调用`View#dispatchAttachedToWindow(AttachInfo, int)`
+ViewRootImpl会在第一次调用`performTraversals()`时(当Activity第一次resume时, `ActivityThread#handleResumeActivity` -> `WindowManagerGlobal#addView` -> `ViewRootImpl#setView` -> `ViewRootImpl#doTraversal` -> `ViewRootImpl#performTraversals`, 省略部分), 一层层遍历调用`View#dispatchAttachedToWindow(AttachInfo, int)`, 将所有Runnable加入消息队列
 
 ```java
     void dispatchAttachedToWindow(AttachInfo info, int visibility) {
@@ -31,9 +31,34 @@ ViewRootImpl会在第一次调用`performTraversals()`时(当Activity第一次re
         }
         //...
     }
+    // 将所有Runnable加入队列
+    public void executeActions(Handler handler) {
+        synchronized (this) {
+            final HandlerAction[] actions = mActions;
+            for (int i = 0, count = mCount; i < count; i++) {
+                final HandlerAction handlerAction = actions[i];
+                handler.postDelayed(handlerAction.action, handlerAction.delay);
+            }
+
+            mActions = null;
+            mCount = 0;
+        }
+    }
 ```
 
-2. 当`View`已经被attach到`Window`上时, 直接执行`Runnable`
+2. 当`View`已经被attach到`Window`上时, 直接将`Runnable`加入到队列
+
+```java
+    public boolean post(Runnable action) {
+        final AttachInfo attachInfo = mAttachInfo;
+        if (attachInfo != null) {
+            return attachInfo.mHandler.post(action);
+        }
+
+        getRunQueue().post(action);
+        return true;
+    }
+```
 
 3. 当`View`从`Window`detach时, 这些`Runnable` __不会__ 被移除
 

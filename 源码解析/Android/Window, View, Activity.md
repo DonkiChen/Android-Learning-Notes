@@ -20,7 +20,7 @@ ___
 
 `WindowManagerGlobal`(单例), 所有和 WMS 交流都通过该类
 
-`WindowManagerImpl`(非单例) 是一个代理类, 把所有操作都交给了 `WindowManagerGlobal`
+`WindowManagerImpl`(非单例) 是一个包装类, 把所有操作都交给了 `WindowManagerGlobal`
 
 在第一个Activity要被启动的时候会调用`WindowManagerGlobal.initialize()`, 初始化 `WindowManagerGlobal`
-`Window`是一个虚类, 唯一的子类是`PhoneWindow`, 在 `Instrumentation.newActivity`创建Activity对象后 -> `Activity.attach`, 这时候创建了一个`PhoneWindow`对象, 并且通过 `WindowManagerImpl.createLocalWindowManager` 创建了一个 `WindowManagerImpl` 对象, 
+`Window`是一个抽象类, 唯一的子类是`PhoneWindow`, 在 `Instrumentation.newActivity`创建Activity对象后 -> `Activity.attach`, 这时候创建了一个`PhoneWindow`对象, 并且通过 `WindowManagerImpl.createLocalWindowManager` 创建了一个 `WindowManagerImpl` 对象, 

@@ -3,7 +3,7 @@ _Android Api 28_
 ___
 
 ## Application
-AMS调用`startProcessLocked`启动`ActivityThread`, `ActivityThread`再去调AMS的`attachApplication`, AMS去调用 `ActivityThread.bindApplication` 配置app信息, 检查是否有`Activity`需要启动(`StackSupervisor.attachApplicationLocked` -> `ActivityStackSupervisor.realStartActivityLocked`), 是否有`Service`需要启动(`ActiveServices.attachApplicationLocked` -> `ActiveServices.realStartServiceLocked`), 是否有广播需要发送(`BroadcastQueue.sendPendingBroadcastsLocked`), 然后`ActivityThread`发送一个`BIND_APPLICATION`到`ActivityThread.H`即`Handler`, 然后Looper开始循环 -> `handleBindApplication` 其中new了Application, 调用了`Application.attachBaseContext`, 初始化了`ContentProvider`, 调用了`Application.onCreate` 
+AMS调用`startProcessLocked`去和`Zygote`(ˈzīˌɡōt)通信, 启动`ActivityThread`, `ActivityThread`再去调AMS的`attachApplication`, AMS去调用 `ActivityThread.bindApplication` 配置app信息, 检查是否有`Activity`需要启动(`ActivityStackSupervisor.attachApplicationLocked` -> `ActivityStackSupervisor.realStartActivityLocked`), 是否有`Service`需要启动(`ActiveServices.attachApplicationLocked` -> `ActiveServices.realStartServiceLocked`), 是否有广播需要发送(`BroadcastQueue.sendPendingBroadcastsLocked`), 然后`ActivityThread`发送一个`BIND_APPLICATION`到`ActivityThread.H`即`Handler`, 然后Looper开始循环 -> `handleBindApplication` 其中new了Application, 调用了`Application.attachBaseContext`, 初始化了`ContentProvider`, 调用了`Application.onCreate` 
 
 ## Activity
 
